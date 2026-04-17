@@ -1,0 +1,6 @@
+{
+  "name": "Campus Care: Student Complaint Platform",
+  "description": "A streamlined platform for students and staff to report campus issues, with real-time admin tracking and resolution workflows.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": []
+}

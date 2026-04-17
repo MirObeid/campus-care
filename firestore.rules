@@ -1,0 +1,180 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {uid}
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required, email format)
+    //   - displayName: string (optional)
+    //   - photoURL: string (optional)
+    //   - role: string (required, enum: student, staff, faculty, admin)
+    //   - createdAt: timestamp (required)
+    //
+    // Collection: complaints
+    // Document ID: {complaintId}
+    // Fields:
+    //   - reporterUid: string (required)
+    //   - reporterName: string (optional)
+    //   - category: string (required, enum: Maintenance, Academic, Security, Administrative, Other)
+    //   - description: string (required, size < 2000)
+    //   - location: string (required, size < 200)
+    //   - status: string (required, enum: Pending, Assigned, In Progress, Resolved, Rejected, Withdrawn)
+    //   - priority: string (optional, enum: Low, Medium, High, Critical)
+    //   - assignedTo: string (optional)
+    //   - assignedToName: string (optional)
+    //   - adminNotes: string (optional, size < 2000)
+    //   - withdrawalReason: string (optional)
+    //   - withdrawnAt: timestamp (optional)
+    //   - createdAt: timestamp (required)
+    //   - updatedAt: timestamp (required)
+    //
+    // Collection: notifications
+    // Document ID: {notificationId}
+    // Fields:
+    //   - userId: string (required)
+    //   - complaintId: string (required)
+    //   - message: string (required, size < 500)
+    //   - read: bool (required)
+    //   - createdAt: timestamp (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "obeidfaheem@gmail.com" && request.auth.token.email_verified == true) ||
+         (request.auth.token.email == "faheemobeidullah@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'createdAt']) &&
+             data.uid == request.auth.uid &&
+             isValidEmail(data.email) &&
+             data.role in ['student', 'staff', 'faculty', 'admin'] &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidComplaint(data) {
+       return data.keys().hasAll(['reporterUid', 'category', 'description', 'location', 'status', 'createdAt', 'updatedAt']) &&
+             data.reporterUid is string &&
+             data.category in ['Maintenance', 'Academic', 'Security', 'Administrative', 'Other'] &&
+             data.description is string && data.description.size() < 2000 &&
+             data.location is string && data.location.size() < 200 &&
+             data.status in ['Pending', 'Assigned', 'In Progress', 'Resolved', 'Rejected', 'Withdrawn'] &&
+             (!('priority' in data) || data.priority in ['Low', 'Medium', 'High', 'Critical']) &&
+             (!('isEmergency' in data) || data.isEmergency is bool) &&
+             (!('aiNote' in data) || (data.aiNote == null || data.aiNote is string)) &&
+             (!('reporterName' in data) || data.reporterName is string) &&
+             (!('lat' in data) || (data.lat == null || data.lat is number)) &&
+             (!('lng' in data) || (data.lng == null || data.lng is number)) &&
+             (!('imageUrl' in data) || (data.imageUrl == null || data.imageUrl is string)) &&
+             (!('rating' in data) || (data.rating is int && data.rating >= 1 && data.rating <= 5)) &&
+             (!('withdrawalReason' in data) || (data.withdrawalReason == null || (data.withdrawalReason is string && data.withdrawalReason.size() < 1000))) &&
+             (!('withdrawnAt' in data) || (data.withdrawnAt == null || data.withdrawnAt is timestamp)) &&
+             (!('assignedTo' in data) || (data.assignedTo == null || data.assignedTo is string)) &&
+             (!('assignedToName' in data) || (data.assignedToName == null || data.assignedToName is string)) &&
+             (!('adminNotes' in data) || (data.adminNotes == null || (data.adminNotes is string && data.adminNotes.size() < 2000))) &&
+             data.createdAt is timestamp &&
+             data.updatedAt is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['userId', 'complaintId', 'message', 'read', 'createdAt']) &&
+             data.userId is string &&
+             data.complaintId is string &&
+             data.message is string && data.message.size() < 500 &&
+             data.read is bool &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidComment(data) {
+      return data.keys().hasAll(['complaintId', 'userId', 'userName', 'text', 'createdAt']) &&
+             data.complaintId is string &&
+             data.userId == request.auth.uid &&
+             data.userName is string &&
+             (!('userPhoto' in data) || (data.userPhoto == null || data.userPhoto is string)) &&
+             (!('parentId' in data) || (data.parentId == null || data.parentId is string)) &&
+             data.text is string && data.text.size() < 1000 &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{uid} {
+      allow read: if isAuthenticated();
+      allow list: if isAdmin();
+      allow create: if isAuthenticated() && isOwner(uid) && isValidUser(request.resource.data) && 
+                      (request.resource.data.role != 'admin' || isAdmin());
+      allow update: if isAuthenticated() && (
+                      (isOwner(uid) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role) ||
+                      isAdmin()
+                    );
+    }
+
+    match /complaints/{complaintId} {
+      allow read: if isAuthenticated() && (isAdmin() || resource.data.reporterUid == request.auth.uid);
+      allow create: if isAuthenticated() && isValidComplaint(request.resource.data) && 
+                      request.resource.data.reporterUid == request.auth.uid &&
+                      request.resource.data.status == 'Pending';
+      allow update: if isAuthenticated() && (
+                      (isAdmin() && isValidComplaint(request.resource.data)) ||
+                      (resource.data.reporterUid == request.auth.uid && 
+                       isValidComplaint(request.resource.data) &&
+                       request.resource.data.reporterUid == resource.data.reporterUid &&
+                       (
+                         // Case 1: Simple update (description etc) if still pending (not changing state)
+                         (resource.data.status == 'Pending' && request.resource.data.status == 'Pending') ||
+                         // Case 2: Only rating update when Resolved
+                         (resource.data.status == 'Resolved' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rating'])) ||
+                         // Case 3: Withdrawal
+                         (['Pending', 'In Progress'].includes(resource.data.status) && request.resource.data.status == 'Withdrawn')
+                       )
+                      )
+                    );
+      allow delete: if isAdmin();
+    }
+
+    match /comments/{commentId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() || 
+        get(/databases/$(database)/documents/complaints/$(resource.data.complaintId)).data.reporterUid == request.auth.uid
+      );
+      allow create: if isAuthenticated() && isValidComment(request.resource.data) && (
+        isAdmin() || 
+        get(/databases/$(database)/documents/complaints/$(request.resource.data.complaintId)).data.reporterUid == request.auth.uid
+      );
+      allow delete: if isAdmin() || resource.data.userId == request.auth.uid;
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAdmin() && isValidNotification(request.resource.data);
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid && 
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+  }
+}
